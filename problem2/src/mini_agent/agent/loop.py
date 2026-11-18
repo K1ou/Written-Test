@@ -352,9 +352,13 @@ class Agent:
             max_tokens=self.config.max_tokens,
         )
 
-    def _stream_with_retry(self, request: ProviderRequest, step: int, cancel: CancelToken) -> StreamResult:
+    def _stream_with_retry(
+        self, request: ProviderRequest, step: int, cancel: CancelToken, *, show_text: bool = True
+    ) -> StreamResult:
+        on_event = self._on_stream_event if show_text else None
+
         def attempt() -> StreamResult:
-            return collect(self.provider.stream(request, cancel), cancel, on_event=self._on_stream_event)
+            return collect(self.provider.stream(request, cancel), cancel, on_event=on_event)
 
         def on_retry(n: int, delay: float, error: RetryableError) -> None:
             self.ui.text_end()
@@ -464,7 +468,8 @@ class Agent:
             max_tokens=SUMMARY_MAX_TOKENS,
         )
         try:
-            result = self._stream_with_retry(request, step, cancel)
+            # The summary is internal: it must not be streamed to the user as if it were the reply.
+            result = self._stream_with_retry(request, step, cancel, show_text=False)
         except Cancelled:
             raise
         except Exception as exc:

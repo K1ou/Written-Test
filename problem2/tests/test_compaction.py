@@ -317,6 +317,15 @@ def test_the_model_written_summary_is_requested_once_per_compaction_and_billed(w
     assert outcome.usage.input_tokens >= 100 * len(provider.summary_requests)
 
 
+def test_the_internal_summary_is_never_shown_to_the_user_as_if_it_were_the_reply(workdir):
+    provider = SummaryMock(reading_script())
+    agent, provider, ui, outcome = run_reading(workdir, provider)
+    assert outcome.status == "completed", outcome.error
+    assert provider.summary_requests, "no summary was requested, so this test proves nothing"
+    assert "Unfinished: the last file" not in ui.text and "Goal: finish" not in ui.text
+    assert "Read them all." in ui.text  # the real reply is still shown
+
+
 def test_a_failing_summary_call_falls_back_to_rule_based_notes(workdir):
     provider = SummaryMock(reading_script(), fail=FatalError("summary backend down", 500))
     agent, provider, ui, outcome = run_reading(workdir, provider)
