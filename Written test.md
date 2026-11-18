@@ -4,8 +4,6 @@
 
 对于上述问题提出完整的解决方案
 
-
-
 ## 二、Mini Agent
 
 ## 1、题目说明
@@ -133,7 +131,7 @@
 
 1. **源代码**，问题一和问题二独立成两个文件夹，问题一作为 markdown 文件，问题二作为一个完整项目代码，保留完整的 commit 历史，不要压成一个 commit。
 
-2. **代码提交**，将代码提交到仓库（https://github.com/justalittl/Written-Test.git）中，并用自己姓名全称+提交日期作为分支名称。
+2. **代码提交**，将代码提交到仓库（https://github.com/justalittl/Written-Test.git）中，并用自己姓名全称+提交日期作为分支名称，不允许直接提交到 Main 分支。
 
 3. **README.md**，包括：
 
