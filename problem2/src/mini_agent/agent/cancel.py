@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 from mini_agent.messages import Message
 
@@ -15,7 +16,10 @@ class Cancelled(Exception):
 
 
 class CancelToken:
-    """One token per turn; shared by the streaming loop, tools and retry sleeps."""
+    """One token per turn; shared by the streaming loop, tools and retry sleeps.
+
+    cancel() may be called from a signal handler or from another thread.
+    """
 
     def __init__(self) -> None:
         self._event = threading.Event()
@@ -28,8 +32,18 @@ class CancelToken:
         return self._event.is_set()
 
     def wait(self, timeout: float) -> bool:
-        """Sleep up to `timeout` seconds; returns True as soon as the token is cancelled."""
-        return self._event.wait(timeout)
+        """Sleep up to `timeout` seconds; returns True as soon as the token is cancelled.
+
+        The wait is sliced into short pieces: on Windows a long blocking wait would not let
+        Ctrl+C be handled until it ends.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return self._event.is_set()
+            if self._event.wait(min(0.1, remaining)):
+                return True
 
     def raise_if_cancelled(self) -> None:
         if self._event.is_set():

@@ -50,6 +50,12 @@ REJECTED_MESSAGE = (
 NOT_EXECUTED_CANCELLED = "NOT executed: the user cancelled the turn before this call ran."
 NO_OUTPUT = "(no output)"
 INTERRUPTED_TURN_NOTE = "(The previous turn ended before a reply was produced.)"
+CANCEL_NOTE_PARTIAL = "[The user interrupted this reply here.]"
+CANCEL_NOTE_TOOLS = (
+    "[The user cancelled the task while tools were running. Calls marked as interrupted or not executed "
+    "did not complete; check the current state before continuing.]"
+)
+CANCEL_NOTE_EMPTY = "[The user cancelled the task before any reply was produced.]"
 
 
 @dataclass
@@ -199,8 +205,11 @@ class Agent:
                 self._commit(Message.assistant(text))
                 self.ui.notice(text, "warn")
                 outcome = TurnResult("max_steps", text=text)
-        except Cancelled:
-            self.ui.notice("Cancelled.", "warn")
+        except (Cancelled, KeyboardInterrupt) as exc:
+            self._reconcile_after_cancel(getattr(exc, "partial", None))
+            # Cancelled: the user's Ctrl+C was turned into a cancellation (normal path).
+            # KeyboardInterrupt: an interrupt arrived with no cancel token installed.
+            self.ui.notice("Cancelled." if isinstance(exc, Cancelled) else "Interrupted. Back at the prompt.", "warn")
             outcome = TurnResult("cancelled")
         finally:
             self.ui.usage(usage)
@@ -209,6 +218,25 @@ class Agent:
         outcome.usage = usage
         outcome.steps = steps
         return outcome
+
+    def _reconcile_after_cancel(self, partial: Message | None) -> None:
+        """Leave a valid history behind after a cancelled turn.
+
+        By now every tool_use in the history has a result (the tool round guarantees it). What is
+        missing is the assistant side: text that was already shown is kept, an incomplete tool call is
+        dropped (its arguments are unusable and it never ran), and an assistant note is added so the
+        history ends with an assistant message and the model knows what happened.
+        """
+        if not self.history or self.history[-1].role == "assistant":
+            return
+        streamed = partial.text.strip() if partial is not None else ""
+        if streamed:
+            text = f"{streamed}\n\n{CANCEL_NOTE_PARTIAL}"
+        elif self.history[-1].tool_results:
+            text = CANCEL_NOTE_TOOLS
+        else:
+            text = CANCEL_NOTE_EMPTY
+        self._commit(Message.assistant(text))
 
     def _fail(self, step: int, message: str) -> None:
         self.logger.error(step, message)

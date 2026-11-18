@@ -11,6 +11,8 @@ with exactly one Done; a stream that stops without Done is treated as a dropped 
 
 from __future__ import annotations
 
+import queue
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -159,25 +161,65 @@ class StreamAccumulator:
         return StreamResult(self._build(lambda call: True), self.stop_reason, self.usage)
 
 
+_END = object()
+
+
 def collect(
     stream: Iterator[StreamEvent],
     cancel: CancelToken,
     on_event: Callable[[StreamEvent], None] | None = None,
 ) -> StreamResult:
-    """Drive a provider stream to completion, honouring cancellation between events."""
+    """Drive a provider stream to completion, honouring cancellation at any moment.
+
+    The stream is read in a helper thread and handed over through a queue. A read that is blocked
+    on the network (a thinking model can stay silent for tens of seconds) therefore cannot delay
+    cancellation: the caller notices the cancel within ~50 ms and abandons the helper thread, which
+    closes the stream itself and discards everything it still receives. `on_event` always runs in the
+    calling thread.
+    """
     acc = StreamAccumulator()
+    events: queue.Queue[Any] = queue.Queue()
+    stop = threading.Event()
+
+    def produce() -> None:
+        try:
+            for event in stream:
+                if stop.is_set():
+                    return
+                events.put(event)
+            events.put(_END)
+        except BaseException as exc:  # handed to the caller, which re-raises it
+            events.put(exc)
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    pass
+
+    threading.Thread(target=produce, daemon=True, name="provider-stream").start()
     try:
-        for event in stream:
-            acc.feed(event)
+        while True:
+            try:
+                item = events.get(timeout=0.05)
+            except queue.Empty:
+                cancel.raise_if_cancelled()
+                continue
+            if item is _END:
+                break
+            if isinstance(item, BaseException):
+                # A connection closed by the cancellation looks like a network error: report it as a cancel.
+                if cancel.is_cancelled and not isinstance(item, Cancelled):
+                    raise Cancelled() from item
+                raise item
+            acc.feed(item)
             if on_event is not None:
-                on_event(event)
-            if cancel.is_cancelled:
-                raise Cancelled()
+                on_event(item)
+            cancel.raise_if_cancelled()
     except Cancelled as exc:
         exc.partial = acc.partial_message()
         raise
     finally:
-        close = getattr(stream, "close", None)
-        if close is not None:
-            close()
+        stop.set()
     return acc.result()

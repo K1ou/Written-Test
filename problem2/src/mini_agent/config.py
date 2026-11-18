@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ConfigError(Exception):
+    """A configuration problem the user can fix; shown without a traceback."""
 
 
 @dataclass
@@ -14,3 +22,30 @@ class AgentConfig:
     shell_timeout: int = 60
     # Skip the y/n confirmation for write_file, edit_file and run_shell.
     auto_yes: bool = False
+
+
+class Settings(BaseSettings):
+    """Provider settings from environment variables and an optional `.env` file.
+
+    API keys are SecretStr, so they print as ********** and never end up in a repr or a log by accident.
+    Empty values (like `GEMINI_MODEL=` in .env.example) count as not set.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True)
+
+    dashscope_api_key: SecretStr | None = None
+    qwen_base_url: str | None = None
+    qwen_model: str = "qwen-plus"
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str | None = None
+    mini_agent_provider: str = "qwen"
+    mini_agent_home: Path | None = None
+
+    @property
+    def state_dir(self) -> Path:
+        """Where sessions and logs live: outside the working directory, so tools cannot touch them."""
+        return self.mini_agent_home or Path.home() / ".mini-agent"
+
+    def secret_values(self) -> list[str]:
+        keys = (self.dashscope_api_key, self.gemini_api_key)
+        return [k.get_secret_value() for k in keys if k is not None]

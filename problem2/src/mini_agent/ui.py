@@ -115,8 +115,8 @@ class ConsoleUI:
             return False
         try:
             answer = self._input("Allow this operation? [y/N] ")
-        except EOFError:
-            return False
+        except (EOFError, KeyboardInterrupt):
+            return False  # Ctrl+C at the question means "no"; the interrupt controller cancels the task
         return answer.strip().lower() in ("y", "yes")
 
     def retry(self, attempt: int, delay: float, error: str) -> None:
