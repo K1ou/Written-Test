@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mini_agent.history import normalize, repair, validate
-from mini_agent.messages import Message, TextBlock, ToolResultBlock, ToolUseBlock
+from mini_agent.messages import AGENT_NOTICE_PREFIX, Message, TextBlock, ToolResultBlock, ToolUseBlock
 from mini_agent.tokens import estimate_message_tokens
 
 SUMMARY_PREFIX = "[Conversation summary"
@@ -181,7 +181,7 @@ def collect_state(messages: list[Message]) -> tuple[list[str], list[str]]:
                     old_requests, old_files = parse_summary(block.text)
                     requests.extend(old_requests)
                     files.extend(old_files)
-                elif isinstance(block, TextBlock) and block.text.strip():
+                elif isinstance(block, TextBlock) and block.text.strip() and not block.text.startswith(AGENT_NOTICE_PREFIX):
                     requests.append(_one_line(block.text, MAX_REQUEST_CHARS))
         else:
             for use in message.tool_uses:
@@ -322,12 +322,17 @@ def compact(
 
     summary = Message.user(build_summary(requests, files, notes or ""))
     result = normalize([summary, *flatten(suffix_units)])
+    result_notes: list[str] = []
     if validate(result):
+        # Correct unit boundaries never get here; repair() is only a last resort and is reported.
         repaired = repair(result)
         if validate(repaired):
             raise CompactionError("the compacted history is invalid and could not be repaired")
         result = repaired
-    return _finish(result, 2, before, tokens, summarized=len(prefix), llm_summary=llm_summary, shrunk_units=shrunk_units)
+        result_notes.append("history needed repair")
+    return _finish(
+        result, 2, before, tokens, summarized=len(prefix), llm_summary=llm_summary, shrunk_units=shrunk_units, notes=result_notes
+    )
 
 
 def _finish(
@@ -339,6 +344,7 @@ def _finish(
     summarized: int = 0,
     llm_summary: bool = False,
     shrunk_units: int = 0,
+    notes: list[str] | None = None,
 ) -> CompactionResult:
     problems = validate(messages)
     if problems:
@@ -351,4 +357,5 @@ def _finish(
         summarized_messages=summarized,
         llm_summary=llm_summary,
         shrunk_units=shrunk_units,
+        notes=notes or [],
     )

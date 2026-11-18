@@ -20,6 +20,8 @@ from typing import Literal
 
 from mini_agent.agent.cancel import CancelToken, Cancelled
 from mini_agent.agent.compaction import CompactionError, compact, render_transcript
+from mini_agent.agent.loop_detector import LoopDetector, LoopVerdict
+from mini_agent.agent.text_toolcall import correction_message, find_text_tool_calls
 from mini_agent.config import AgentConfig
 from mini_agent.history import repair, validate
 from mini_agent.logging_ import Redactor, RequestLogger
@@ -42,7 +44,9 @@ from mini_agent.ui import AgentUI
 
 log = logging.getLogger("mini_agent.loop")
 
-TurnStatus = Literal["completed", "max_steps", "too_many_failures", "cancelled", "error"]
+TurnStatus = Literal[
+    "completed", "max_steps", "too_many_failures", "cancelled", "error", "loop_detected", "malformed_output"
+]
 
 REJECTED_MESSAGE = (
     "The user rejected this operation, so it was NOT executed. Do not retry the same operation; "
@@ -50,6 +54,11 @@ REJECTED_MESSAGE = (
 )
 NOT_EXECUTED_CANCELLED = "NOT executed: the user cancelled the turn before this call ran."
 NO_OUTPUT = "(no output)"
+NOT_EXECUTED_LOOP = "NOT executed: the task was stopped because the same calls kept repeating."
+NOT_EXECUTED_STOPPED_REPLY = (
+    "NOT executed: the provider stopped this reply (for example its safety filter), so the reply may be "
+    "incomplete. Ask the user how to proceed or rephrase the request."
+)
 INTERRUPTED_TURN_NOTE = "(The previous turn ended before a reply was produced.)"
 CANCEL_NOTE_PARTIAL = "[The user interrupted this reply here.]"
 CANCEL_NOTE_TOOLS = (
@@ -137,7 +146,9 @@ class Agent:
         self._token_scale = 1.0
         # Length of the history right after the last compaction, to avoid compacting again straight away.
         self._compacted_at: int | None = None
-
+        self._detector = LoopDetector(self.config.loop_threshold, self.config.loop_max_period)
+        # Set when the loop detector decides the task must stop (level 3).
+        self._loop_stop: LoopVerdict | None = None
     # ------------------------------------------------------------------ history
 
     def _commit(self, message: Message) -> None:
@@ -165,6 +176,9 @@ class Agent:
         steps = 0
         failures = 0
         empty_responses = 0
+        corrections = 0
+        self._detector.reset()
+        self._loop_stop = None
         outcome = TurnResult(status="completed")
         try:
             while steps < self.config.max_steps:
@@ -203,10 +217,38 @@ class Agent:
                 if not uses:
                     if result.stop_reason == "max_tokens":
                         self.ui.notice("The reply was cut off by the max_tokens limit.", "warn")
+                    elif result.stop_reason == "error":
+                        self.ui.notice("The provider stopped this reply early (for example a safety filter).", "warn")
+                    else:
+                        written = find_text_tool_calls(message.text, self.registry.names)
+                        if written and corrections < self.config.max_text_tool_corrections:
+                            corrections += 1
+                            self.logger.log("text_tool_call", step=steps, tools=[c.name for c in written])
+                            self.ui.notice(
+                                "The model wrote a tool call as text instead of calling the tool; "
+                                "asking it to use the tool interface.",
+                                "warn",
+                            )
+                            self._commit(Message.user(correction_message(written)))
+                            continue
+                        if written:
+                            text = (
+                                "Stopped: the model keeps writing tool calls as plain text instead of using the "
+                                "tool interface. Nothing was executed."
+                            )
+                            self.ui.notice(text, "warn")
+                            outcome = TurnResult("malformed_output", text=text)
+                            break
                     outcome = TurnResult("completed", text=message.text)
                     break
 
                 failures = self._run_tool_round(uses, result.stop_reason, ctx, steps, failures)
+                if self._loop_stop is not None:
+                    text = self._loop_stop.stop_text()
+                    self._commit(Message.assistant(text))
+                    self.ui.notice(text, "warn")
+                    outcome = TurnResult("loop_detected", text=text)
+                    break
                 if failures >= self.config.max_consecutive_failures:
                     text = (
                         f"Stopped: {failures} tool calls failed in a row. Tell me how you would like to proceed "
@@ -460,6 +502,9 @@ class Agent:
         try:
             for use in uses:
                 ctx.cancel.raise_if_cancelled()
+                if self._loop_stop is not None:
+                    blocks.append(ToolResultBlock(tool_use_id=use.id, content=NOT_EXECUTED_LOOP, is_error=True))
+                    continue
                 outcome = self._run_tool(use, stop_reason, ctx, step)
                 blocks.append(outcome.block)
                 if outcome.failed:
@@ -483,11 +528,19 @@ class Agent:
 
         def finish(content: str, *, is_error: bool, failed: bool = False, rejected: bool = False) -> _ToolOutcome:
             content = content if content.strip() else NO_OUTPUT
+            verdict = self._detector.record(use, content, is_error)
+            if verdict is not None:
+                self.logger.log("loop_detected", step=step, level=verdict.level, rule=verdict.rule, detail=verdict.description)
+                if verdict.level >= 3:
+                    self._loop_stop = verdict
+                content = f"{content}\n\n{verdict.hint()}"
             self.logger.tool(step, use, content, is_error, rejected)
             self.ui.tool_result(use.name, content, is_error)
             block = ToolResultBlock(tool_use_id=use.id, content=content, is_error=is_error)
             return _ToolOutcome(block, failed=failed, rejected=rejected)
 
+        if stop_reason == "error":
+            return finish(NOT_EXECUTED_STOPPED_REPLY, is_error=True, failed=True)
         if not use.arguments_valid:
             return finish(invalid_arguments_message(use, stop_reason), is_error=True, failed=True)
         try:

@@ -5,6 +5,7 @@ import re
 import pytest
 from helpers import make_agent
 
+import mini_agent.agent.compaction as compaction_module
 from mini_agent.agent.cancel import CancelToken
 from mini_agent.agent.compaction import (
     CompactionError,
@@ -73,17 +74,48 @@ def test_splitting_refuses_a_call_without_results():
 # ----------------------------------------------------- validity under every cut
 
 
+def _invented_results(messages, original):
+    """Tool results that are neither original nor a shrink placeholder, i.e. made up by repair()."""
+    known = {r.content for m in original for r in m.tool_results}
+    return [
+        r.content
+        for m in messages
+        for r in m.tool_results
+        if r.content not in known and not r.content.startswith(OMITTED_OUTPUT)
+    ]
+
+
+def _sweep_problems(original, keep):
+    problems = []
+    for target in range(0, tokens(original) + 200, 37):
+        try:
+            out = compact(original, target_tokens=target, keep_recent_units=keep)
+        except CompactionError:
+            problems.append((target, "error"))
+            continue
+        if validate(out.messages):
+            problems.append((target, "invalid"))
+        elif "history needed repair" in out.notes or _invented_results(out.messages, original):
+            problems.append((target, "repair was needed"))
+    return problems
+
+
 @pytest.mark.parametrize("calls", [1, 3])
 @pytest.mark.parametrize("keep", [1, 2, 3])
 def test_every_budget_gives_a_valid_history_that_keeps_the_latest_unit(calls, keep):
     original = history(8, size=800, calls=calls)
-    total = tokens(original)
-    for target in range(0, total + 200, 37):
+    assert _sweep_problems(original, keep) == []
+    for target in range(0, tokens(original) + 200, 37):
         out = compact(original, target_tokens=target, keep_recent_units=keep)
-        assert validate(out.messages) == [], f"target={target}"
         assert out.messages[0].role == "user"
         if out.changed:
             assert out.messages[-1] == original[-1]
+
+
+def test_the_sweep_fails_when_units_are_split_per_message(monkeypatch):
+    """Mutation check done in memory: with a broken split_units the sweep must notice."""
+    monkeypatch.setattr(compaction_module, "split_units", lambda messages: [[m] for m in messages])
+    assert _sweep_problems(history(8, size=800, calls=3), keep=1) != []
 
 
 def test_a_naive_message_count_cut_would_produce_invalid_histories():

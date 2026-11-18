@@ -15,6 +15,10 @@ from pydantic import BaseModel, Field, model_validator
 Role = Literal["user", "assistant"]
 StopReason = Literal["end_turn", "tool_use", "max_tokens", "error"]
 
+# User-role messages written by the agent itself (not typed by the user) start with this, so that
+# compaction does not mistake them for user requests.
+AGENT_NOTICE_PREFIX = "[Agent notice]"
+
 
 class TextBlock(BaseModel):
     type: Literal["text"] = "text"

@@ -32,6 +32,13 @@ class AgentConfig:
     llm_summary: bool = True
     # The newest this-many units are never shrunk or summarized.
     keep_recent_units: int = 2
+    # Tool calls written as plain text are not executed; the model is told to use the tool interface,
+    # at most this many times per task.
+    max_text_tool_corrections: int = 2
+    # Loop detection (see agent/loop_detector.py): the same call with the same result this many times in a
+    # row, or a cycle of 2..loop_max_period calls repeated this many rounds.
+    loop_threshold: int = 3
+    loop_max_period: int = 3
 
 
 class Settings(BaseSettings):
