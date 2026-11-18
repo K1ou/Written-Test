@@ -46,6 +46,8 @@ class MockTurn:
     error_after_events: int = 0
     # After yielding this many events, block until the turn is cancelled.
     block_after_events: int | None = None
+    # Send no UsageEvent, like providers that do not report token usage.
+    omit_usage: bool = False
 
 
 class MockProvider:
@@ -75,7 +77,8 @@ class MockProvider:
             events.append(ToolCallStart(call_id, call.name))
             events.extend(ToolCallArgsDelta(call_id, c) for c in self._chunks(raw))
             events.append(ToolCallEnd(call_id))
-        events.append(UsageEvent(turn.usage or Usage(input_tokens=10, output_tokens=5)))
+        if not turn.omit_usage:
+            events.append(UsageEvent(turn.usage or Usage(input_tokens=10, output_tokens=5)))
         stop = turn.stop_reason or ("tool_use" if turn.tool_calls else "end_turn")
         events.append(Done(stop))
         return events
