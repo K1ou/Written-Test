@@ -22,6 +22,16 @@ class AgentConfig:
     shell_timeout: int = 60
     # Skip the y/n confirmation for write_file, edit_file and run_shell.
     auto_yes: bool = False
+    # Context management (see agent/compaction.py). The window is the model's context size in tokens.
+    context_window: int = 128_000
+    # Compaction starts when the estimated request reaches this share of the window ...
+    compact_threshold: float = 0.8
+    # ... and shrinks the request to about this share.
+    compact_target: float = 0.5
+    # Ask the model for a progress summary; when False (or when that call fails) a rule-based one is used.
+    llm_summary: bool = True
+    # The newest this-many units are never shrunk or summarized.
+    keep_recent_units: int = 2
 
 
 class Settings(BaseSettings):
@@ -40,6 +50,7 @@ class Settings(BaseSettings):
     gemini_model: str | None = None
     mini_agent_provider: str = "qwen"
     mini_agent_home: Path | None = None
+    mini_agent_context_window: int = 128_000
 
     @property
     def state_dir(self) -> Path:

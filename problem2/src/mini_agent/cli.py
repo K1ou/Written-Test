@@ -35,7 +35,7 @@ class RunOptions:
     resume: str | None = None
     max_steps: int = 30
     log_file: str | None = None
-
+    context_window: int | None = None
 
 def _same_dir(a: str, b: str) -> bool:
     return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
@@ -105,7 +105,11 @@ def _run(
         sandbox,
         ui,
         build_system_prompt(str(sandbox.root)),
-        AgentConfig(max_steps=options.max_steps, auto_yes=options.yes),
+        AgentConfig(
+            max_steps=options.max_steps,
+            auto_yes=options.yes,
+            context_window=options.context_window or settings.mini_agent_context_window,
+        ),
         logger=logger,
         redactor=redactor,
         history=history,
@@ -138,7 +142,8 @@ def main(
     resume: Annotated[str | None, typer.Option(help="Continue the saved session with this id")] = None,
     max_steps: Annotated[int, typer.Option(min=1, help="Maximum model calls for one task")] = 30,
     log_file: Annotated[str | None, typer.Option(help="Write the request/response log here (default: <state dir>/logs/<session id>.log)")] = None,
+    context_window: Annotated[int | None, typer.Option(min=2000, help="Context window of the model in tokens; older history is compacted at 80% of it (default: MINI_AGENT_CONTEXT_WINDOW or 128000)")] = None,
 ) -> None:
     _make_console_safe()
-    code = run(RunOptions(workdir, provider, model, yes, resume, max_steps, log_file))
+    code = run(RunOptions(workdir, provider, model, yes, resume, max_steps, log_file, context_window))
     raise typer.Exit(code)

@@ -62,9 +62,10 @@ def make_agent(
     logger: RequestLogger | None = None,
     redactor=None,
     max_retries: int = 4,
+    provider: MockProvider | None = None,
 ):
     ui = ui or RecordingUI()
-    provider = MockProvider(script)
+    provider = provider or MockProvider(script)
     sleeps: list[float] = []
     agent = Agent(
         provider,
